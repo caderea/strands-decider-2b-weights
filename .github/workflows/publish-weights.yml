@@ -62,7 +62,7 @@ jobs:
               def find(obj):
                   if isinstance(obj, dict):
                       for k, v in obj.items():
-                          if k == "base_revision" and isinstance(v, str) and v:
+                          if k in ("base_model_revision", "base_revision") and isinstance(v, str) and v:
                               return v
                           found = find(v)
                           if found:

@@ -68,6 +68,19 @@ class RangeResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Invalid resume"):
             b"".join(module.iter_resumable(s, "https://example.test/x", 10, sleep=lambda _: None))
 
+    def test_release_lookup_retries_until_draft_visible(self):
+        draft = {"tag_name": "tag", "draft": True, "assets": []}
+        with patch.object(module, "find_release", side_effect=[None, None, draft]) as finder, \
+             patch.object(module.time, "sleep") as sleeper:
+            self.assertEqual(module.release_assets("owner/repo", "tag", attempts=4, delay=1), {})
+            self.assertEqual(finder.call_count, 3)
+            self.assertEqual(sleeper.call_count, 2)
+
+    def test_release_lookup_never_reuses_published(self):
+        with patch.object(module, "find_release", return_value={"draft": False}):
+            with self.assertRaisesRegex(ValueError, "already published"):
+                module.release_assets("owner/repo", "tag", attempts=2, delay=0)
+
     def test_reuses_only_matching_draft_asset(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "weights.zip.part0000"

@@ -154,7 +154,7 @@ def download(args):
         download_url(base + "/manifest.json", manifest_path)
         m = read_manifest(manifest_path)
         # Persist verified parts next to output for interrupted download recovery.
-        cache = Path(args.cache).resolve() if args.cache else Path(args.out).resolve().parent / ".strands-parts"
+        cache = Path(args.cache).resolve() if args.cache else Path(args.out).resolve().parent / (".strands-parts-" + args.tag)
         cache.mkdir(parents=True, exist_ok=True)
         for item in m["parts"]:
             name = item["name"]

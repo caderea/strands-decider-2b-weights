@@ -173,11 +173,18 @@ def find_release(repo, tag):
         page += 1
 
 
-def release_assets(repo, tag):
-    release = find_release(repo, tag)
-    if release is None or not release.get("draft"):
-        raise ValueError("Expected an existing draft release; refusing to overwrite a published release")
-    return {a["name"]: a for a in release.get("assets", [])}
+def release_assets(repo, tag, attempts=15, delay=2):
+    """Wait for a newly created draft release to become visible to list API."""
+    for i in range(attempts):
+        release = find_release(repo, tag)
+        if release is not None:
+            if not release.get("draft"):
+                raise ValueError("Release is already published; refusing to overwrite")
+            return {a["name"]: a for a in release.get("assets", [])}
+        if i + 1 < attempts:
+            print(f"Draft release {tag} not visible yet; retrying ({i + 1}/{attempts})", flush=True)
+            time.sleep(delay)
+    raise ValueError(f"Draft release {tag} still not visible after {attempts} checks")
 
 
 def upload_or_reuse(part, repo, tag, prior):

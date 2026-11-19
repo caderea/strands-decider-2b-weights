@@ -1,0 +1,10 @@
+dist/
+models/
+.strands-parts-*/
+*.safetensors
+*.bin
+*.pt
+*.zip
+*.part[0-9][0-9][0-9][0-9]
+__pycache__/
+*.pyc

@@ -1,0 +1,127 @@
+name: Publish Strands Decider 2B weights
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Select base model or Strands adapter
+        type: choice
+        options:
+          - base
+          - adapter
+        required: true
+      revision:
+        description: Optional upstream commit SHA (leave blank for adapter main or base_revision from adapter provenance)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: strands-weights-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install publishing requirements
+        run: python -m pip install --disable-pip-version-check 'huggingface_hub>=0.30,<2' 'requests>=2.32,<3'
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Choose upstream source
+        env:
+          COMPONENT: ${{ inputs.component }}
+          INPUT_REVISION: ${{ inputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COMPONENT" == "adapter" ]]; then
+            echo 'MODEL_REPO=StrandsAgents/strands-decider-2B-qwen3.5-v1-2610' >> "$GITHUB_ENV"
+            echo 'RELEASE_TAG=strands-decider-2b-adapter-v1' >> "$GITHUB_ENV"
+            echo "MODEL_REVISION=${INPUT_REVISION:-main}" >> "$GITHUB_ENV"
+          elif [[ "$COMPONENT" == "base" ]]; then
+            echo 'MODEL_REPO=Qwen/Qwen3.5-2B-Base' >> "$GITHUB_ENV"
+            echo 'RELEASE_TAG=strands-decider-2b-base-v1' >> "$GITHUB_ENV"
+            if [[ -n "$INPUT_REVISION" ]]; then
+              echo "MODEL_REVISION=$INPUT_REVISION" >> "$GITHUB_ENV"
+            else
+              python - <<'PY'
+          import json, os
+          from huggingface_hub import hf_hub_download
+          repo = "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610"
+          # Pin the same base revision as the official adapter.
+          for file in ("provenance.json", "strands_decider_config.json"):
+              try:
+                  data = json.load(open(hf_hub_download(repo, file)))
+              except Exception:
+                  continue
+              def find(obj):
+                  if isinstance(obj, dict):
+                      for k, v in obj.items():
+                          if k == "base_revision" and isinstance(v, str) and v:
+                              return v
+                          found = find(v)
+                          if found:
+                              return found
+                  if isinstance(obj, list):
+                      for item in obj:
+                          found = find(item)
+                          if found:
+                              return found
+                  return None
+              revision = find(data)
+              if revision:
+                  with open(os.environ["GITHUB_ENV"], "a") as f:
+                      f.write(f"MODEL_REVISION={revision}\n")
+                  print(f"Selected adapter-pinned Qwen base revision: {revision}")
+                  break
+          else:
+              raise SystemExit("Cannot find base_revision in adapter provenance; supply an explicit base revision")
+          PY
+            fi
+          fi
+      - name: Resume an existing draft or create a new draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          sys.path.insert(0, "scripts")
+          from stream_release import find_release
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["RELEASE_TAG"]
+          existing = find_release(repo, tag)
+          if existing is not None:
+              if not existing.get("draft"):
+                  raise SystemExit("Release already published; refusing overwrite")
+              print(f"Resuming draft {tag} with {len(existing.get('assets', []))} assets")
+          else:
+              subprocess.run([
+                  "gh", "release", "create", tag, "--draft",
+                  "--target", os.environ["GITHUB_SHA"], "--repo", repo,
+                  "--title", f"{os.environ['MODEL_REPO']} mirror",
+                  "--notes", f"Unmodified upstream model: https://huggingface.co/{os.environ['MODEL_REPO']}; see manifest for resolved commit and SHA-256."
+              ], check=True)
+          PY
+      - name: Stream model snapshot into verified release chunks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/stream_release.py \
+            --repo "$MODEL_REPO" \
+            --revision "$MODEL_REVISION" \
+            --out dist \
+            --chunk-mib 1024 \
+            --release-tag "$RELEASE_TAG"
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --repo "$GITHUB_REPOSITORY"
